@@ -1,0 +1,13 @@
+Pod da API antes: catalogo-api-84764d989-4rs87
+
+$ kubectl -n iac-tutorialk8s delete pod catalogo-api-84764d989-4rs87
+pod "catalogo-api-84764d989-4rs87" deleted from iac-tutorialk8s namespace
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment "catalogo-api" rollout to finish: 0 of 1 updated replicas are available...
+deployment "catalogo-api" successfully rolled out
+
+$ kubectl -n iac-tutorialk8s get pods -l app=catalogo-api
+NAME                           READY   STATUS    RESTARTS   AGE
+catalogo-api-84764d989-qdtdh   1/1     Running   0          8s
+

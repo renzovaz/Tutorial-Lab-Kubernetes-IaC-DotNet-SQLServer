@@ -1,0 +1,73 @@
+# Alterações:
+diff --git a/src/LabIaCK8s/CatalogoApi/Program.cs b/src/LabIaCK8s/CatalogoApi/Program.cs
+index 938a765..ce9564c 100644
+--- a/src/LabIaCK8s/CatalogoApi/Program.cs
++++ b/src/LabIaCK8s/CatalogoApi/Program.cs
+@@ -31,7 +31,7 @@ if (migrateOnly)
+ 
+ app.MapGet("/", () => new
+ {
+-    aplicacao = "Catalogo tutorialk8s", versao = "1.0",
++    aplicacao = "Catalogo tutorialk8s", versao = "1.1",
+     pod = Environment.GetEnvironmentVariable("HOSTNAME") ?? "local"
+ });
+ app.MapGet("/health/live", () => Results.Ok(new { status = "vivo" }));
+diff --git a/src/LabIaCK8s/k8s/04-api.yaml b/src/LabIaCK8s/k8s/04-api.yaml
+index ac7ad57..849fd56 100644
+--- a/src/LabIaCK8s/k8s/04-api.yaml
++++ b/src/LabIaCK8s/k8s/04-api.yaml
+@@ -20,7 +20,7 @@ spec:
+     spec:
+       containers:
+         - name: api
+-          image: tutorialk8s-catalogo-api:1.0
++          image: tutorialk8s-catalogo-api:1.1
+           imagePullPolicy: IfNotPresent
+           ports:
+             - name: http
+
+$ docker build --platform linux/amd64 --provenance=false -f ./CatalogoApi/Dockerfile -t tutorialk8s-catalogo-api:1.1 .
+sha256:07a2d7cdfbe80692c951f1a83fb2f45d9b030e9af5fee52933ad916da4bad874
+
+$ /home/wsl/.local/bin/kind load docker-image tutorialk8s-catalogo-api:1.1 --name lab-k8s
+Image: "tutorialk8s-catalogo-api:1.1" with ID "sha256:07a2d7cdfbe80692c951f1a83fb2f45d9b030e9af5fee52933ad916da4bad874" not yet present on node "lab-k8s-control-plane", loading...
+
+$ kubectl apply -f ./k8s/04-api.yaml
+deployment.apps/catalogo-api configured
+service/catalogo-api unchanged
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment "catalogo-api" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "catalogo-api" rollout to finish: 1 old replicas are pending termination...
+deployment "catalogo-api" successfully rolled out
+
+$ kubectl -n iac-tutorialk8s rollout history deployment/catalogo-api
+deployment.apps/catalogo-api 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         <none>
+
+
+$ kubectl -n iac-tutorialk8s get pods -l app=catalogo-api -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready
+NAME                            IMAGE                          READY
+catalogo-api-64cb6f7b46-4cr2t   tutorialk8s-catalogo-api:1.1   true
+catalogo-api-84764d989-qdtdh    tutorialk8s-catalogo-api:1.0   false
+
+PS> Invoke-RestMethod http://localhost:8080/ | Format-List
+
+
+aplicacao : Catalogo tutorialk8s
+versao    : 1.1
+pod       : catalogo-api-64cb6f7b46-4cr2t
+
+
+
+
+PS> Invoke-RestMethod http://localhost:8080/produtos | Format-Table
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+

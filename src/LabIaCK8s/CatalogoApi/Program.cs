@@ -31,7 +31,7 @@ if (migrateOnly)
 
 app.MapGet("/", () => new
 {
-    aplicacao = "Catalogo tutorialk8s", versao = "1.0",
+    aplicacao = "Catalogo tutorialk8s", versao = "1.1",
     pod = Environment.GetEnvironmentVariable("HOSTNAME") ?? "local"
 });
 app.MapGet("/health/live", () => Results.Ok(new { status = "vivo" }));

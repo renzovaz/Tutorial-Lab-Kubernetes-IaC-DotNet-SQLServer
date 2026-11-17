@@ -1,0 +1,54 @@
+PS> Invoke-RestMethod "$base/"
+
+
+aplicacao : Catalogo tutorialk8s
+versao    : 1.0
+pod       : catalogo-api-84764d989-4rs87
+
+
+
+PS> Invoke-RestMethod "$base/health/live"
+
+
+status : vivo
+
+
+
+PS> Invoke-RestMethod "$base/health/ready"
+
+
+status : pronto
+
+
+
+PS> Invoke-RestMethod "$base/produtos"   (lista vazia)
+PS> $json = @{ nome = "Caderno"; preco = 19.90 } | ConvertTo-Json
+PS> $criado = Invoke-RestMethod -Method Post -Uri "$base/produtos" -ContentType "application/json" -Body $json; $criado
+
+
+id    : 1
+nome  : Caderno
+preco : 19,9
+
+
+
+PS> Invoke-RestMethod "$base/produtos/$($criado.id)"
+
+
+id    : 1
+nome  : Caderno
+preco : 19,90
+
+
+
+PS> Invoke-RestMethod -Method Put -Uri "$base/produtos/$($criado.id)" -ContentType "application/json" -Body $novo
+
+PS> Invoke-RestMethod "$base/produtos"
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+PS> Validacao: POST com nome vazio e preco negativo (esperado: 400)
+HTTP 400

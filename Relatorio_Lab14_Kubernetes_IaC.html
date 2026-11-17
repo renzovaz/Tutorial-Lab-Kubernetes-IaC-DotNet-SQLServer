@@ -1,0 +1,537 @@
+<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>Laboratório 14 - Kubernetes e IaC</title><style>
+@page { size: A4; margin: 16mm 14mm; }
+body { font-family: Arial, Helvetica, sans-serif; color:#1d1d1f; font-size: 11pt; line-height:1.45; }
+h1 { color:#4b0f6e; font-size: 20pt; margin:0 0 4px; }
+h2 { color:#4b0f6e; font-size: 14pt; border-bottom:2px solid #c2185b; padding-bottom:3px; margin-top:22px; page-break-after: avoid; }
+h3 { color:#4b0f6e; font-size: 12pt; margin:14px 0 4px; }
+.capa { border:1px solid #ddd; border-left:6px solid #c2185b; padding:12px 16px; margin:12px 0 18px; }
+.capa p { margin:3px 0; }
+pre { background:#f6f6f8; border:1px solid #e0e0e6; padding:8px 10px; font-family: Consolas, 'Courier New', monospace;
+      font-size: 7.6pt; line-height:1.3; white-space: pre-wrap; word-break: break-all; }
+.arq { color:#777; font-size:8.5pt; margin:-6px 0 0; }
+code { font-family: Consolas, monospace; font-size: 9.5pt; background:#f1eef6; padding:0 3px; border-radius:2px; }
+table { border-collapse: collapse; width:100%; font-size:10pt; }
+td, th { border:1px solid #ddd; padding:6px 8px; vertical-align: top; text-align:left; }
+th { background:#f1eef6; color:#4b0f6e; }
+.nota { background:#fff7e6; border:1px solid #f0d090; padding:8px 12px; font-size:10pt; }
+.quebra { page-break-before: always; }
+</style></head><body>
+<h1>Laboratório 14 – Kubernetes e IaC com .NET e SQL Server</h1>
+<div class="capa">
+<p><b>Disciplina:</b> Integração DevOps – Turma A – 0726 – Taguatinga II – Matutino</p>
+<p><b>Professor:</b> Daniel Lim-Apo</p>
+<p><b>Aluno(a):</b> ____________________________________ &nbsp; <b>RA:</b> ______________</p>
+<p><b>Dupla:</b> ____________________________________</p>
+<p><b>Repositório (fork):</b> https://github.com/renzovaz/Tutorial-Lab-Kubernetes-IaC-DotNet-SQLServer</p>
+<p><b>Data de execução:</b> 17/11/2026</p>
+</div>
+
+<h2>Resumo</h2>
+<p>A API de catálogo (ASP.NET Core / .NET 10 + EF Core) foi publicada em um cluster Kubernetes local com o SQL Server em
+StatefulSet e volume persistente. A infraestrutura foi declarada nos manifestos YAML do diretório <code>k8s/</code>:
+Namespace, ConfigMap, StatefulSet + Service headless, Job de migração, Deployment + Service. O Secret foi criado à parte
+para manter a senha fora do Git. As evidências comprovam:</p>
+<ul>
+<li>criação e consulta de produto pelo endereço local (seção 6);</li>
+<li>persistência do produto após recriar o Pod do SQL Server (seção 7);</li>
+<li>reconciliação ao excluir um Pod da API (seção 8);</li>
+<li>alteração de réplicas no YAML e estado resultante (seção 9);</li>
+<li>atualização da aplicação para a versão 1.1 com rolling update (seção 10).</li>
+</ul>
+<div class="nota"><b>Ambiente:</b> Windows 11 x64 com Docker Desktop (engine Linux) e WSL2. O Kubernetes local foi provisionado
+com <b>kind</b> (v0.30.0, Kubernetes v1.34), opção prevista no roteiro (slide 21). Por isso o contexto se chama
+<code>kind-lab-k8s</code>, e a imagem foi carregada no nó com <code>kind load docker-image</code>, equivalente ao script
+<code>Importar-Imagem-Kind.ps1</code>. O SDK .NET 10 foi usado pela imagem oficial <code>dotnet/sdk:10.0</code>. Os comandos
+<code>kubectl</code> são os mesmos do roteiro, e as chamadas HTTP foram feitas no PowerShell com <code>Invoke-RestMethod</code>.</div>
+<h2>Papel de cada recurso Kubernetes</h2><table><tr><th style='width:26%'>Recurso</th><th>Papel no laboratório</th></tr><tr><td><b>Namespace</b></td><td><code>iac-tutorialk8s</code> isola todos os recursos do laboratório. Excluí-lo remove tudo de uma vez, inclusive o PVC.</td></tr><tr><td><b>ConfigMap</b></td><td><code>api-config</code> guarda a configuração não sensível (servidor, nome do banco, usuário), injetada como variáveis de ambiente na API e no Job.</td></tr><tr><td><b>Secret</b></td><td><code>banco-secrets</code> guarda a senha do <code>sa</code>, separada do código e do Git, e é usada pelo SQL Server, pelo Job e pela API.</td></tr><tr><td><b>StatefulSet</b></td><td>Executa o SQL Server com identidade estável (<code>sqlserver-0</code>) e um volume próprio criado a partir do <code>volumeClaimTemplates</code>. Se o Pod for recriado, ele volta com o mesmo nome e o mesmo volume.</td></tr><tr><td><b>PersistentVolumeClaim (PVC)</b></td><td><code>dados-sqlserver-0</code> (8 GiB) pede armazenamento persistente montado em <code>/var/opt/mssql</code>. Os dados vivem no volume, não no Pod, por isso sobrevivem à recriação do Pod.</td></tr><tr><td><b>Service headless (sqlserver)</b></td><td><code>clusterIP: None</code> dá ao banco um nome DNS estável (<code>sqlserver:1433</code>) que a API e o Job usam para se conectar.</td></tr><tr><td><b>Job</b></td><td><code>db-migrate</code> roda uma única vez até concluir e aplica as migrations do EF Core antes da API subir. Assim nenhuma réplica da API altera o esquema ao iniciar, e não há corrida entre réplicas.</td></tr><tr><td><b>Deployment</b></td><td><code>catalogo-api</code> declara a imagem e o número de réplicas. Por meio do ReplicaSet, reconcilia o estado (recria Pods excluídos), escala e faz rolling updates.</td></tr><tr><td><b>Service ClusterIP (catalogo-api)</b></td><td>Endereço estável na porta 80 que encaminha para a porta 8080 dos Pods <b>prontos</b> com o label <code>app=catalogo-api</code>. O port-forward usa esse Service para os testes locais.</td></tr><tr><td><b>Sondas (probes)</b></td><td><b>startup</b> espera o processo iniciar; <b>liveness</b> (<code>/health/live</code>) só verifica o processo; <b>readiness</b> (<code>/health/ready</code>) verifica o acesso ao SQL e tira o Pod do Service se o banco cair.</td></tr></table><h2>Perguntas do roteiro</h2><h3>Por que a liveness não depende do SQL?</h3><p>Se o banco ficar indisponível, uma liveness ligada ao SQL faria o Kubernetes reiniciar todos os Pods da API sem motivo, já que o processo está saudável e reiniciar não resolve a falha do banco. Isso pode causar reinícios em cascata. A dependência do banco fica na <b>readiness</b>: o Pod apenas deixa de receber tráfego até o banco voltar.</p><h3>Por que a migration usa um Job?</h3><p>A migration é uma tarefa única que precisa terminar antes da API. Com o Job, ela roda uma vez, tem logs e status (Complete/Failed) e permite retentativas controladas (<code>backoffLimit</code>). Se cada réplica da API migrasse ao iniciar, várias réplicas poderiam tentar alterar o esquema ao mesmo tempo, e a API precisaria de permissões de DDL.</p><h3>O que permanece no Git, o que permanece no volume e o que pode desaparecer com a substituição de um Pod?</h3><p><b>No Git:</b> código C#, migrations, manifestos YAML, <code>packages.lock.json</code> e o manifesto de ferramentas, ou seja, a infraestrutura como código (sem a senha). <b>No volume (PVC):</b> os dados do SQL Server, como o produto cadastrado. <b>Pode desaparecer com o Pod:</b> o sistema de arquivos do contêiner, logs locais, conexões abertas, o IP do Pod e o port-forward ativo. Tudo isso é recriado a partir da imagem e dos manifestos.</p><h2 class='quebra'>Evidências da execução</h2><h3>1. Ambiente, compilação e migration inicial</h3><p>SDK .NET 10 (executado no contêiner oficial <code>mcr.microsoft.com/dotnet/sdk:10.0</code>), restore com lock file, build, instalação do <code>dotnet-ef</code> no manifesto local e geração da migration <code>Inicial</code> (arquivos em <code>CatalogoApi/Migrations</code>).</p><pre>10.0.404 [/usr/share/dotnet/sdk]
+  Determining projects to restore...
+  Restored /work/CatalogoApi/CatalogoApi.csproj (in 7.58 sec).
+  CatalogoApi -&gt; /work/CatalogoApi/bin/Debug/net10.0/CatalogoApi.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:04.18
+The template &quot;Dotnet local tool manifest file&quot; was created successfully.
+
+You can invoke the tool from this directory using the following commands: &#x27;dotnet tool run dotnet-ef&#x27; or &#x27;dotnet dotnet-ef&#x27;.
+Tool &#x27;dotnet-ef&#x27; (version &#x27;10.0.15&#x27;) was successfully installed. Entry is added to the manifest file /work/dotnet-tools.json.
+Build started...
+Build succeeded.
+Done. To undo this action, use &#x27;ef migrations remove&#x27;</pre><p class="arq">Arquivo: evidencias/01-build-e-migration.txt</p><h3>2. Imagem da API</h3><p>Build em dois estágios (SDK → ASP.NET runtime) e importação da imagem no nó do cluster kind (equivalente ao slide 21).</p><pre>$ docker build --platform linux/amd64 --provenance=false -f ./CatalogoApi/Dockerfile -t tutorialk8s-catalogo-api:1.0 .
+#15 [stage-1 3/3] COPY --from=build /out .
+#15 DONE 0.1s
+
+#16 exporting to image
+#16 exporting layers
+#16 exporting layers 2.4s done
+#16 exporting manifest sha256:f541d236514efd2f67772ed93d154f8f717089ea8fa2bc634bf0c37e9c8d7f07 done
+#16 exporting config sha256:add90d13dc1d779183b32c777e62f623a1ac08dc05d26a2edfdb7bcd979a16f4 done
+#16 naming to docker.io/library/tutorialk8s-catalogo-api:1.0 done
+#16 unpacking to docker.io/library/tutorialk8s-catalogo-api:1.0
+#16 unpacking to docker.io/library/tutorialk8s-catalogo-api:1.0 0.4s done
+#16 DONE 2.8s
+$ docker images tutorialk8s-catalogo-api
+IMAGE                          ID             DISK USAGE   CONTENT SIZE   EXTRA
+tutorialk8s-catalogo-api:1.0   f541d236514e        453MB          125MB        
+$ kind load docker-image tutorialk8s-catalogo-api:1.0 --name lab-k8s
+Image: &quot;tutorialk8s-catalogo-api:1.0&quot; with ID &quot;sha256:f541d236514efd2f67772ed93d154f8f717089ea8fa2bc634bf0c37e9c8d7f07&quot; not yet present on node &quot;lab-k8s-control-plane&quot;, loading...</pre><p class="arq">Arquivo: evidencias/02-imagem.txt</p><h3>3. Cluster, Namespace, ConfigMap, Secret e SQL Server</h3><p>Contexto do cluster, nó <b>Ready</b>, StorageClass padrão, criação do Secret <code>banco-secrets</code> (senha omitida, fora do Git), StatefulSet do SQL Server com o PVC <code>dados-sqlserver-0</code> em <b>Bound</b>.</p><pre>$ kubectl config current-context
+kind-lab-k8s
+
+$ kubectl get nodes -o wide
+NAME                    STATUS   ROLES           AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION                      CONTAINER-RUNTIME
+lab-k8s-control-plane   Ready    control-plane   2m17s   v1.34.0   172.18.0.2    &lt;none&gt;        Debian GNU/Linux 12 (bookworm)   6.18.58.1-microsoft-standard-WSL2   containerd://2.1.3
+
+$ kubectl get storageclass
+NAME                 PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      ALLOWVOLUMEEXPANSION   AGE
+standard (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   false                  2m13s
+
+$ kubectl apply -f ./k8s/00-namespace.yaml
+namespace/iac-tutorialk8s created
+
+$ kubectl apply -f ./k8s/01-configmap.yaml
+configmap/api-config created
+
+$ kubectl -n iac-tutorialk8s create secret generic banco-secrets --from-literal=SA_PASSWORD=******** (senha omitida)
+secret/banco-secrets created
+
+$ kubectl -n iac-tutorialk8s get configmap,secret
+NAME                         DATA   AGE
+configmap/api-config         3      0s
+configmap/kube-root-ca.crt   1      0s
+
+NAME                   TYPE     DATA   AGE
+secret/banco-secrets   Opaque   1      0s
+
+$ kubectl apply -f ./k8s/02-sqlserver.yaml
+Warning: spec.SessionAffinity is ignored for headless services
+service/sqlserver created
+statefulset.apps/sqlserver created
+
+$ kubectl -n iac-tutorialk8s wait --for=condition=Ready pod/sqlserver-0 --timeout=400s
+pod/sqlserver-0 condition met
+
+$ kubectl -n iac-tutorialk8s get pods,pvc
+NAME              READY   STATUS    RESTARTS   AGE
+pod/sqlserver-0   1/1     Running   0          53s
+
+NAME                                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       &lt;unset&gt;                 53s
+
+$ kubectl -n iac-tutorialk8s logs sqlserver-0 | grep -i &quot;ready for client&quot;
+
+2026-11-17 18:02:41.83 spid37s     SQL Server is now ready for client connections. This is an informational message; no user action is required.</pre><p class="arq">Arquivo: evidencias/03-namespace-secret-sqlserver.txt</p><h3>4. Job de migração</h3><p>O Job <code>db-migrate</code> executa a mesma imagem com <code>--migrate</code>, cria o banco <code>Catalogo</code> e a tabela <code>Produtos</code>, e termina como <b>Complete</b> com a mensagem “Migrations aplicadas.”.</p><pre>$ kubectl apply -f ./k8s/03-migration-job.yaml
+job.batch/db-migrate created
+
+$ kubectl -n iac-tutorialk8s wait --for=condition=complete job/db-migrate --timeout=300s
+job.batch/db-migrate condition met
+
+$ kubectl -n iac-tutorialk8s logs job/db-migrate
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (224ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;60&#x27;]
+      CREATE DATABASE [Catalogo];
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (104ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;60&#x27;]
+      IF SERVERPROPERTY(&#x27;EngineEdition&#x27;) &lt;&gt; 5
+      BEGIN
+          ALTER DATABASE [Catalogo] SET READ_COMMITTED_SNAPSHOT ON;
+      END;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (5ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      SELECT 1
+info: Microsoft.EntityFrameworkCore.Migrations[20411]
+      Acquiring an exclusive lock for migration application. See https://aka.ms/efcore-docs-migrations-lock for more information if this takes too long.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (23ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      DECLARE @result int;
+      EXEC @result = sp_getapplock @Resource = &#x27;__EFMigrationsLock&#x27;, @LockOwner = &#x27;Session&#x27;, @LockMode = &#x27;Exclusive&#x27;;
+      SELECT @result
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (5ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      IF OBJECT_ID(N&#x27;[__EFMigrationsHistory]&#x27;) IS NULL
+      BEGIN
+          CREATE TABLE [__EFMigrationsHistory] (
+              [MigrationId] nvarchar(150) NOT NULL,
+              [ProductVersion] nvarchar(32) NOT NULL,
+              CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
+          );
+      END;
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (1ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      SELECT 1
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (1ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      SELECT OBJECT_ID(N&#x27;[__EFMigrationsHistory]&#x27;);
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (9ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      SELECT [MigrationId], [ProductVersion]
+      FROM [__EFMigrationsHistory]
+      ORDER BY [MigrationId];
+info: Microsoft.EntityFrameworkCore.Migrations[20402]
+      Applying migration &#x27;20261117180104_Inicial&#x27;.
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (2ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      CREATE TABLE [Produtos] (
+          [Id] int NOT NULL IDENTITY,
+          [Nome] nvarchar(80) NOT NULL,
+          [Preco] decimal(18,2) NOT NULL,
+          CONSTRAINT [PK_Produtos] PRIMARY KEY ([Id])
+      );
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (5ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+      VALUES (N&#x27;20261117180104_Inicial&#x27;, N&#x27;10.0.15&#x27;);
+info: Microsoft.EntityFrameworkCore.Database.Command[20101]
+      Executed DbCommand (3ms) [Parameters=[], CommandType=&#x27;Text&#x27;, CommandTimeout=&#x27;30&#x27;]
+      DECLARE @result int;
+      EXEC @result = sp_releaseapplock @Resource = &#x27;__EFMigrationsLock&#x27;, @LockOwner = &#x27;Session&#x27;;
+      SELECT @result
+Migrations aplicadas.
+
+$ kubectl -n iac-tutorialk8s get jobs
+NAME         STATUS     COMPLETIONS   DURATION   AGE
+db-migrate   Complete   1/1           5s         5s
+</pre><p class="arq">Arquivo: evidencias/04-migration-job.txt</p><h3>5. Publicação da API</h3><p>Deployment <code>catalogo-api</code> e Service ClusterIP (porta 80 → 8080).</p><pre>$ kubectl apply -f ./k8s/04-api.yaml
+deployment.apps/catalogo-api created
+service/catalogo-api created
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment &quot;catalogo-api&quot; rollout to finish: 0 of 1 updated replicas are available...
+deployment &quot;catalogo-api&quot; successfully rolled out
+
+$ kubectl -n iac-tutorialk8s get pods,svc
+NAME                               READY   STATUS      RESTARTS   AGE
+pod/catalogo-api-84764d989-4rs87   1/1     Running     0          5s
+pod/db-migrate-s249t               0/1     Completed   0          10s
+pod/sqlserver-0                    1/1     Running     0          68s
+
+NAME                   TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+service/catalogo-api   ClusterIP   10.96.38.60   &lt;none&gt;        80/TCP     5s
+service/sqlserver      ClusterIP   None          &lt;none&gt;        1433/TCP   68s
+</pre><p class="arq">Arquivo: evidencias/05-api-deploy.txt</p><h3>6. Evidência: criação e consulta de produto</h3><p>Chamadas pelo PowerShell via <code>port-forward</code> em <code>http://localhost:8080</code>: raiz (versão e Pod), health live/ready, lista vazia, POST (id 1), GET por id, PUT e listagem. A validação retorna HTTP 400 como esperado.</p><pre>PS&gt; Invoke-RestMethod &quot;$base/&quot;
+
+
+aplicacao : Catalogo tutorialk8s
+versao    : 1.0
+pod       : catalogo-api-84764d989-4rs87
+
+
+
+PS&gt; Invoke-RestMethod &quot;$base/health/live&quot;
+
+
+status : vivo
+
+
+
+PS&gt; Invoke-RestMethod &quot;$base/health/ready&quot;
+
+
+status : pronto
+
+
+
+PS&gt; Invoke-RestMethod &quot;$base/produtos&quot;   (lista vazia)
+PS&gt; $json = @{ nome = &quot;Caderno&quot;; preco = 19.90 } | ConvertTo-Json
+PS&gt; $criado = Invoke-RestMethod -Method Post -Uri &quot;$base/produtos&quot; -ContentType &quot;application/json&quot; -Body $json; $criado
+
+
+id    : 1
+nome  : Caderno
+preco : 19,9
+
+
+
+PS&gt; Invoke-RestMethod &quot;$base/produtos/$($criado.id)&quot;
+
+
+id    : 1
+nome  : Caderno
+preco : 19,90
+
+
+
+PS&gt; Invoke-RestMethod -Method Put -Uri &quot;$base/produtos/$($criado.id)&quot; -ContentType &quot;application/json&quot; -Body $novo
+
+PS&gt; Invoke-RestMethod &quot;$base/produtos&quot;
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+PS&gt; Validacao: POST com nome vazio e preco negativo (esperado: 400)
+HTTP 400</pre><p class="arq">Arquivo: evidencias/06-testes-api.txt</p><h3>7. Evidência: persistência após recriar o Pod do banco</h3><p>O Pod <code>sqlserver-0</code> foi excluído. O StatefulSet o recriou com <b>outro UID</b>, mas reutilizando o <b>mesmo PVC</b> (mesmo volume <code>pvc-e84f1d36…</code>). O produto “Caderno universitario” continua no banco.</p><pre>### ANTES
+PS&gt; Invoke-RestMethod http://localhost:8080/produtos | Format-Table
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+
+$ kubectl -n iac-tutorialk8s get pod sqlserver-0 -o custom-columns=NAME:.metadata.name,UID:.metadata.uid,START:.status.startTime
+NAME          UID                                    START
+sqlserver-0   4b58d11f-294b-48bd-b9b9-85fced579e1e   2026-11-17T18:01:54Z
+
+$ kubectl -n iac-tutorialk8s delete pod sqlserver-0
+pod &quot;sqlserver-0&quot; deleted from iac-tutorialk8s namespace
+
+$ kubectl -n iac-tutorialk8s get pods,pvc
+NAME                               READY   STATUS              RESTARTS   AGE
+pod/catalogo-api-84764d989-4rs87   1/1     Running             0          70s
+pod/db-migrate-s249t               0/1     Completed           0          75s
+pod/sqlserver-0                    0/1     ContainerCreating   0          0s
+
+NAME                                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       &lt;unset&gt;                 2m13s
+
+$ kubectl -n iac-tutorialk8s wait --for=condition=Ready pod/sqlserver-0 --timeout=300s
+pod/sqlserver-0 condition met
+
+$ kubectl -n iac-tutorialk8s get pod sqlserver-0 -o custom-columns=NAME:.metadata.name,UID:.metadata.uid,START:.status.startTime
+NAME          UID                                    START
+sqlserver-0   56078aa1-f065-400c-a393-b2b6a0d802d8   2026-11-17T18:04:03Z
+
+$ kubectl -n iac-tutorialk8s get pvc
+NAME                STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       &lt;unset&gt;                 2m19s
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+deployment &quot;catalogo-api&quot; successfully rolled out
+
+### DEPOIS (novo Pod do banco, mesmo PVC)
+PS&gt; Invoke-RestMethod http://localhost:8080/health/ready | Format-List
+
+
+status : pronto
+
+
+
+
+PS&gt; Invoke-RestMethod http://localhost:8080/produtos | Format-Table
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+</pre><p class="arq">Arquivo: evidencias/07-persistencia.txt</p><h3>8. Evidência: reconciliação de um Pod da API</h3><p>Ao excluir o Pod da API, o Deployment (via ReplicaSet) cria imediatamente outro Pod para voltar ao estado desejado (1 réplica). Compare os nomes antes e depois.</p><pre>Pod da API antes: catalogo-api-84764d989-4rs87
+
+$ kubectl -n iac-tutorialk8s delete pod catalogo-api-84764d989-4rs87
+pod &quot;catalogo-api-84764d989-4rs87&quot; deleted from iac-tutorialk8s namespace
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment &quot;catalogo-api&quot; rollout to finish: 0 of 1 updated replicas are available...
+deployment &quot;catalogo-api&quot; successfully rolled out
+
+$ kubectl -n iac-tutorialk8s get pods -l app=catalogo-api
+NAME                           READY   STATUS    RESTARTS   AGE
+catalogo-api-84764d989-qdtdh   1/1     Running   0          8s
+</pre><p class="arq">Arquivo: evidencias/08-reconciliacao.txt</p><h3>9. Evidência: alteração de réplicas no YAML</h3><p><code>replicas: 1 → 2</code> em <code>k8s/04-api.yaml</code> (diff abaixo). Dois Pods da API ficam prontos, o EndpointSlice do Service passa a ter dois endereços, e o SQL Server continua com uma única instância. Depois o arquivo voltou para <code>replicas: 1</code>.</p><pre># Alteração em k8s/04-api.yaml:
+diff --git a/src/LabIaCK8s/k8s/04-api.yaml b/src/LabIaCK8s/k8s/04-api.yaml
+index ac7ad57..2a8c5de 100644
+--- a/src/LabIaCK8s/k8s/04-api.yaml
++++ b/src/LabIaCK8s/k8s/04-api.yaml
+@@ -4,7 +4,7 @@ metadata:
+   name: catalogo-api
+   namespace: iac-tutorialk8s
+ spec:
+-  replicas: 1
++  replicas: 2
+   strategy:
+     type: RollingUpdate
+     rollingUpdate:
+
+$ kubectl apply -f ./k8s/04-api.yaml
+deployment.apps/catalogo-api configured
+service/catalogo-api unchanged
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment &quot;catalogo-api&quot; rollout to finish: 1 of 2 updated replicas are available...
+deployment &quot;catalogo-api&quot; successfully rolled out
+
+$ kubectl -n iac-tutorialk8s get pods -l app=catalogo-api -o wide
+NAME                           READY   STATUS    RESTARTS   AGE   IP            NODE                    NOMINATED NODE   READINESS GATES
+catalogo-api-84764d989-c8q8f   1/1     Running   0          4s    10.244.0.11   lab-k8s-control-plane   &lt;none&gt;           &lt;none&gt;
+catalogo-api-84764d989-qdtdh   1/1     Running   0          18s   10.244.0.10   lab-k8s-control-plane   &lt;none&gt;           &lt;none&gt;
+
+$ kubectl -n iac-tutorialk8s get endpointslices -l kubernetes.io/service-name=catalogo-api
+NAME                 ADDRESSTYPE   PORTS   ENDPOINTS                 AGE
+catalogo-api-vsn4n   IPv4          8080    10.244.0.10,10.244.0.11   2m12s
+
+$ kubectl -n iac-tutorialk8s get statefulset,deployment
+NAME                         READY   AGE
+statefulset.apps/sqlserver   1/1     3m15s
+
+NAME                           READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/catalogo-api   2/2     2            2           2m12s
+</pre><p class="arq">Arquivo: evidencias/09-escala-2-replicas.txt</p><h3>10. Atualização da aplicação para a versão 1.1</h3><p>Versão alterada em <code>Program.cs</code>, nova imagem <code>:1.1</code>, tag atualizada no YAML e rolling update (maxUnavailable 0, maxSurge 1). A raiz da API passa a responder <b>versao 1.1</b> e o produto continua lá.</p><pre># Alterações:
+diff --git a/src/LabIaCK8s/CatalogoApi/Program.cs b/src/LabIaCK8s/CatalogoApi/Program.cs
+index 938a765..ce9564c 100644
+--- a/src/LabIaCK8s/CatalogoApi/Program.cs
++++ b/src/LabIaCK8s/CatalogoApi/Program.cs
+@@ -31,7 +31,7 @@ if (migrateOnly)
+ 
+ app.MapGet(&quot;/&quot;, () =&gt; new
+ {
+-    aplicacao = &quot;Catalogo tutorialk8s&quot;, versao = &quot;1.0&quot;,
++    aplicacao = &quot;Catalogo tutorialk8s&quot;, versao = &quot;1.1&quot;,
+     pod = Environment.GetEnvironmentVariable(&quot;HOSTNAME&quot;) ?? &quot;local&quot;
+ });
+ app.MapGet(&quot;/health/live&quot;, () =&gt; Results.Ok(new { status = &quot;vivo&quot; }));
+diff --git a/src/LabIaCK8s/k8s/04-api.yaml b/src/LabIaCK8s/k8s/04-api.yaml
+index ac7ad57..849fd56 100644
+--- a/src/LabIaCK8s/k8s/04-api.yaml
++++ b/src/LabIaCK8s/k8s/04-api.yaml
+@@ -20,7 +20,7 @@ spec:
+     spec:
+       containers:
+         - name: api
+-          image: tutorialk8s-catalogo-api:1.0
++          image: tutorialk8s-catalogo-api:1.1
+           imagePullPolicy: IfNotPresent
+           ports:
+             - name: http
+
+$ docker build --platform linux/amd64 --provenance=false -f ./CatalogoApi/Dockerfile -t tutorialk8s-catalogo-api:1.1 .
+sha256:07a2d7cdfbe80692c951f1a83fb2f45d9b030e9af5fee52933ad916da4bad874
+
+$ /home/wsl/.local/bin/kind load docker-image tutorialk8s-catalogo-api:1.1 --name lab-k8s
+Image: &quot;tutorialk8s-catalogo-api:1.1&quot; with ID &quot;sha256:07a2d7cdfbe80692c951f1a83fb2f45d9b030e9af5fee52933ad916da4bad874&quot; not yet present on node &quot;lab-k8s-control-plane&quot;, loading...
+
+$ kubectl apply -f ./k8s/04-api.yaml
+deployment.apps/catalogo-api configured
+service/catalogo-api unchanged
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment &quot;catalogo-api&quot; rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment &quot;catalogo-api&quot; rollout to finish: 1 old replicas are pending termination...
+deployment &quot;catalogo-api&quot; successfully rolled out
+
+$ kubectl -n iac-tutorialk8s rollout history deployment/catalogo-api
+deployment.apps/catalogo-api 
+REVISION  CHANGE-CAUSE
+1         &lt;none&gt;
+2         &lt;none&gt;
+
+
+$ kubectl -n iac-tutorialk8s get pods -l app=catalogo-api -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[0].image,READY:.status.containerStatuses[0].ready
+NAME                            IMAGE                          READY
+catalogo-api-64cb6f7b46-4cr2t   tutorialk8s-catalogo-api:1.1   true
+catalogo-api-84764d989-qdtdh    tutorialk8s-catalogo-api:1.0   false
+
+PS&gt; Invoke-RestMethod http://localhost:8080/ | Format-List
+
+
+aplicacao : Catalogo tutorialk8s
+versao    : 1.1
+pod       : catalogo-api-64cb6f7b46-4cr2t
+
+
+
+
+PS&gt; Invoke-RestMethod http://localhost:8080/produtos | Format-Table
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+</pre><p class="arq">Arquivo: evidencias/10-atualizacao-1.1.txt</p><h3>11. Estado final do namespace</h3><p>Todos os recursos do namespace <code>iac-tutorialk8s</code> e os eventos registrados.</p><pre>$ kubectl -n iac-tutorialk8s get all,pvc,configmap,secret
+NAME                                READY   STATUS      RESTARTS   AGE
+pod/catalogo-api-64cb6f7b46-4cr2t   1/1     Running     0          22s
+pod/db-migrate-s249t                0/1     Completed   0          3m12s
+pod/sqlserver-0                     1/1     Running     0          117s
+
+NAME                   TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+service/catalogo-api   ClusterIP   10.96.38.60   &lt;none&gt;        80/TCP     3m7s
+service/sqlserver      ClusterIP   None          &lt;none&gt;        1433/TCP   4m10s
+
+NAME                           READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/catalogo-api   1/1     1            1           3m7s
+
+NAME                                      DESIRED   CURRENT   READY   AGE
+replicaset.apps/catalogo-api-64cb6f7b46   1         1         1       22s
+replicaset.apps/catalogo-api-84764d989    0         0         0       3m7s
+
+NAME                         READY   AGE
+statefulset.apps/sqlserver   1/1     4m10s
+
+NAME                   STATUS     COMPLETIONS   DURATION   AGE
+job.batch/db-migrate   Complete   1/1           5s         3m12s
+
+NAME                                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       &lt;unset&gt;                 4m10s
+
+NAME                         DATA   AGE
+configmap/api-config         3      4m10s
+configmap/kube-root-ca.crt   1      4m10s
+
+NAME                   TYPE     DATA   AGE
+secret/banco-secrets   Opaque   1      4m10s
+
+$ kubectl -n iac-tutorialk8s get events --sort-by=.metadata.creationTimestamp
+LAST SEEN   TYPE      REASON                  OBJECT                                    MESSAGE
+117s        Normal    SuccessfulCreate        statefulset/sqlserver                     create Pod sqlserver-0 in StatefulSet sqlserver successful
+4m10s       Normal    SuccessfulCreate        statefulset/sqlserver                     create Claim dados-sqlserver-0 Pod sqlserver-0 in StatefulSet sqlserver success
+4m10s       Normal    ExternalProvisioning    persistentvolumeclaim/dados-sqlserver-0   Waiting for a volume to be created either by the external provisioner &#x27;rancher.io/local-path&#x27; or manually by the system administrator. If volume creation is delayed, please verify that the provisioner is running and correctly registered.
+4m10s       Normal    Provisioning            persistentvolumeclaim/dados-sqlserver-0   External provisioner is provisioning volume for claim &quot;iac-tutorialk8s/dados-sqlserver-0&quot;
+4m10s       Normal    WaitForFirstConsumer    persistentvolumeclaim/dados-sqlserver-0   waiting for first consumer to be created before binding
+4m6s        Normal    ProvisioningSucceeded   persistentvolumeclaim/dados-sqlserver-0   Successfully provisioned volume pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df
+4m6s        Normal    Scheduled               pod/sqlserver-0                           Successfully assigned iac-tutorialk8s/sqlserver-0 to lab-k8s-control-plane
+4m5s        Normal    Pulling                 pod/sqlserver-0                           Pulling image &quot;mcr.microsoft.com/mssql/server:2022-latest&quot;
+3m24s       Normal    Pulled                  pod/sqlserver-0                           Successfully pulled image &quot;mcr.microsoft.com/mssql/server:2022-latest&quot; in 39.471s (39.471s including waiting). Image size: 485792885 bytes.
+3m24s       Normal    Started                 pod/sqlserver-0                           Started container sqlserver
+3m24s       Normal    Created                 pod/sqlserver-0                           Created container: sqlserver
+3m12s       Normal    SuccessfulCreate        job/db-migrate                            Created pod: db-migrate-s249t
+3m12s       Normal    Scheduled               pod/db-migrate-s249t                      Successfully assigned iac-tutorialk8s/db-migrate-s249t to lab-k8s-control-plane
+3m11s       Normal    Created                 pod/db-migrate-s249t                      Created container: migracao
+3m11s       Normal    Pulled                  pod/db-migrate-s249t                      Container image &quot;tutorialk8s-catalogo-api:1.0&quot; already present on machine
+3m11s       Normal    Started                 pod/db-migrate-s249t                      Started container migracao
+3m7s        Normal    SuccessfulCreate        replicaset/catalogo-api-84764d989         Created pod: catalogo-api-84764d989-4rs87
+3m7s        Normal    Completed               job/db-migrate                            Job completed
+3m7s        Normal    Scheduled               pod/catalogo-api-84764d989-4rs87          Successfully assigned iac-tutorialk8s/catalogo-api-84764d989-4rs87 to lab-k8s-control-plane
+3m7s        Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled up replica set catalogo-api-84764d989 from 0 to 1
+3m6s        Normal    Created                 pod/catalogo-api-84764d989-4rs87          Created container: api
+3m6s        Normal    Started                 pod/catalogo-api-84764d989-4rs87          Started container api
+3m6s        Normal    Pulled                  pod/catalogo-api-84764d989-4rs87          Container image &quot;tutorialk8s-catalogo-api:1.0&quot; already present on machine
+2m29s       Normal    Killing                 pod/sqlserver-0                           Stopping container sqlserver
+117s        Normal    Scheduled               pod/sqlserver-0                           Successfully assigned iac-tutorialk8s/sqlserver-0 to lab-k8s-control-plane
+117s        Normal    Pulled                  pod/sqlserver-0                           Container image &quot;mcr.microsoft.com/mssql/server:2022-latest&quot; already present on machine
+117s        Normal    Created                 pod/sqlserver-0                           Created container: sqlserver
+117s        Normal    Started                 pod/sqlserver-0                           Started container sqlserver
+111s        Warning   Unhealthy               pod/catalogo-api-84764d989-4rs87          Readiness probe failed: Get &quot;http://10.244.0.8:8080/health/ready&quot;: context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+96s         Warning   Unhealthy               pod/catalogo-api-84764d989-4rs87          Readiness probe failed: HTTP probe failed with statuscode: 503
+73s         Normal    SuccessfulCreate        replicaset/catalogo-api-84764d989         Created pod: catalogo-api-84764d989-qdtdh
+73s         Normal    Scheduled               pod/catalogo-api-84764d989-qdtdh          Successfully assigned iac-tutorialk8s/catalogo-api-84764d989-qdtdh to lab-k8s-control-plane
+73s         Normal    Killing                 pod/catalogo-api-84764d989-4rs87          Stopping container api
+72s         Normal    Started                 pod/catalogo-api-84764d989-qdtdh          Started container api
+72s         Normal    Created                 pod/catalogo-api-84764d989-qdtdh          Created container: api
+72s         Normal    Pulled                  pod/catalogo-api-84764d989-qdtdh          Container image &quot;tutorialk8s-catalogo-api:1.0&quot; already present on machine
+59s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled up replica set catalogo-api-84764d989 from 1 to 2
+59s         Normal    SuccessfulCreate        replicaset/catalogo-api-84764d989         Created pod: catalogo-api-84764d989-c8q8f
+59s         Normal    Scheduled               pod/catalogo-api-84764d989-c8q8f          Successfully assigned iac-tutorialk8s/catalogo-api-84764d989-c8q8f to lab-k8s-control-plane
+58s         Normal    Pulled                  pod/catalogo-api-84764d989-c8q8f          Container image &quot;tutorialk8s-catalogo-api:1.0&quot; already present on machine
+58s         Normal    Started                 pod/catalogo-api-84764d989-c8q8f          Started container api
+58s         Normal    Created                 pod/catalogo-api-84764d989-c8q8f          Created container: api
+22s         Normal    Scheduled               pod/catalogo-api-64cb6f7b46-4cr2t         Successfully assigned iac-tutorialk8s/catalogo-api-64cb6f7b46-4cr2t to lab-k8s-control-plane
+22s         Normal    SuccessfulDelete        replicaset/catalogo-api-84764d989         Deleted pod: catalogo-api-84764d989-c8q8f
+22s         Normal    Killing                 pod/catalogo-api-84764d989-c8q8f          Stopping container api
+22s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled down replica set catalogo-api-84764d989 from 2 to 1
+22s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled up replica set catalogo-api-64cb6f7b46 from 0 to 1
+22s         Normal    SuccessfulCreate        replicaset/catalogo-api-64cb6f7b46        Created pod: catalogo-api-64cb6f7b46-4cr2t
+22s         Normal    Started                 pod/catalogo-api-64cb6f7b46-4cr2t         Started container api
+22s         Normal    Created                 pod/catalogo-api-64cb6f7b46-4cr2t         Created container: api
+22s         Normal    Pulled                  pod/catalogo-api-64cb6f7b46-4cr2t         Container image &quot;tutorialk8s-catalogo-api:1.1&quot; already present on machine
+18s         Normal    SuccessfulDelete        replicaset/catalogo-api-84764d989         Deleted pod: catalogo-api-84764d989-qdtdh
+18s         Normal    Killing                 pod/catalogo-api-84764d989-qdtdh          Stopping container api
+18s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled down replica set catalogo-api-84764d989 from 1 to 0
+</pre><p class="arq">Arquivo: evidencias/11-recursos-namespace.txt</p>
+<h2>Conclusão</h2>
+<p>O laboratório mostrou o ciclo completo de IaC com Kubernetes. O estado desejado fica declarado em YAML versionado, e o cluster
+reconcilia continuamente o estado real. Pods são descartáveis: o Deployment recria a API e o StatefulSet recria o banco
+com a mesma identidade e o mesmo volume, por isso os dados sobreviveram. A migração em Job, a separação entre ConfigMap e
+Secret e as sondas de liveness/readiness tornam a publicação previsível e segura para atualizações (versão 1.1 sem indisponibilidade).</p>
+</body></html>

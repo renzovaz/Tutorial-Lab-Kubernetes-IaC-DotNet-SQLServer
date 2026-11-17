@@ -1,0 +1,18 @@
+$ kubectl apply -f ./k8s/04-api.yaml
+deployment.apps/catalogo-api created
+service/catalogo-api created
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment "catalogo-api" rollout to finish: 0 of 1 updated replicas are available...
+deployment "catalogo-api" successfully rolled out
+
+$ kubectl -n iac-tutorialk8s get pods,svc
+NAME                               READY   STATUS      RESTARTS   AGE
+pod/catalogo-api-84764d989-4rs87   1/1     Running     0          5s
+pod/db-migrate-s249t               0/1     Completed   0          10s
+pod/sqlserver-0                    1/1     Running     0          68s
+
+NAME                   TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+service/catalogo-api   ClusterIP   10.96.38.60   <none>        80/TCP     5s
+service/sqlserver      ClusterIP   None          <none>        1433/TCP   68s
+

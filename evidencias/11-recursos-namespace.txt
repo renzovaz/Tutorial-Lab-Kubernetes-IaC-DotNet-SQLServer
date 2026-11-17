@@ -1,0 +1,90 @@
+$ kubectl -n iac-tutorialk8s get all,pvc,configmap,secret
+NAME                                READY   STATUS      RESTARTS   AGE
+pod/catalogo-api-64cb6f7b46-4cr2t   1/1     Running     0          22s
+pod/db-migrate-s249t                0/1     Completed   0          3m12s
+pod/sqlserver-0                     1/1     Running     0          117s
+
+NAME                   TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+service/catalogo-api   ClusterIP   10.96.38.60   <none>        80/TCP     3m7s
+service/sqlserver      ClusterIP   None          <none>        1433/TCP   4m10s
+
+NAME                           READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/catalogo-api   1/1     1            1           3m7s
+
+NAME                                      DESIRED   CURRENT   READY   AGE
+replicaset.apps/catalogo-api-64cb6f7b46   1         1         1       22s
+replicaset.apps/catalogo-api-84764d989    0         0         0       3m7s
+
+NAME                         READY   AGE
+statefulset.apps/sqlserver   1/1     4m10s
+
+NAME                   STATUS     COMPLETIONS   DURATION   AGE
+job.batch/db-migrate   Complete   1/1           5s         3m12s
+
+NAME                                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       <unset>                 4m10s
+
+NAME                         DATA   AGE
+configmap/api-config         3      4m10s
+configmap/kube-root-ca.crt   1      4m10s
+
+NAME                   TYPE     DATA   AGE
+secret/banco-secrets   Opaque   1      4m10s
+
+$ kubectl -n iac-tutorialk8s get events --sort-by=.metadata.creationTimestamp
+LAST SEEN   TYPE      REASON                  OBJECT                                    MESSAGE
+117s        Normal    SuccessfulCreate        statefulset/sqlserver                     create Pod sqlserver-0 in StatefulSet sqlserver successful
+4m10s       Normal    SuccessfulCreate        statefulset/sqlserver                     create Claim dados-sqlserver-0 Pod sqlserver-0 in StatefulSet sqlserver success
+4m10s       Normal    ExternalProvisioning    persistentvolumeclaim/dados-sqlserver-0   Waiting for a volume to be created either by the external provisioner 'rancher.io/local-path' or manually by the system administrator. If volume creation is delayed, please verify that the provisioner is running and correctly registered.
+4m10s       Normal    Provisioning            persistentvolumeclaim/dados-sqlserver-0   External provisioner is provisioning volume for claim "iac-tutorialk8s/dados-sqlserver-0"
+4m10s       Normal    WaitForFirstConsumer    persistentvolumeclaim/dados-sqlserver-0   waiting for first consumer to be created before binding
+4m6s        Normal    ProvisioningSucceeded   persistentvolumeclaim/dados-sqlserver-0   Successfully provisioned volume pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df
+4m6s        Normal    Scheduled               pod/sqlserver-0                           Successfully assigned iac-tutorialk8s/sqlserver-0 to lab-k8s-control-plane
+4m5s        Normal    Pulling                 pod/sqlserver-0                           Pulling image "mcr.microsoft.com/mssql/server:2022-latest"
+3m24s       Normal    Pulled                  pod/sqlserver-0                           Successfully pulled image "mcr.microsoft.com/mssql/server:2022-latest" in 39.471s (39.471s including waiting). Image size: 485792885 bytes.
+3m24s       Normal    Started                 pod/sqlserver-0                           Started container sqlserver
+3m24s       Normal    Created                 pod/sqlserver-0                           Created container: sqlserver
+3m12s       Normal    SuccessfulCreate        job/db-migrate                            Created pod: db-migrate-s249t
+3m12s       Normal    Scheduled               pod/db-migrate-s249t                      Successfully assigned iac-tutorialk8s/db-migrate-s249t to lab-k8s-control-plane
+3m11s       Normal    Created                 pod/db-migrate-s249t                      Created container: migracao
+3m11s       Normal    Pulled                  pod/db-migrate-s249t                      Container image "tutorialk8s-catalogo-api:1.0" already present on machine
+3m11s       Normal    Started                 pod/db-migrate-s249t                      Started container migracao
+3m7s        Normal    SuccessfulCreate        replicaset/catalogo-api-84764d989         Created pod: catalogo-api-84764d989-4rs87
+3m7s        Normal    Completed               job/db-migrate                            Job completed
+3m7s        Normal    Scheduled               pod/catalogo-api-84764d989-4rs87          Successfully assigned iac-tutorialk8s/catalogo-api-84764d989-4rs87 to lab-k8s-control-plane
+3m7s        Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled up replica set catalogo-api-84764d989 from 0 to 1
+3m6s        Normal    Created                 pod/catalogo-api-84764d989-4rs87          Created container: api
+3m6s        Normal    Started                 pod/catalogo-api-84764d989-4rs87          Started container api
+3m6s        Normal    Pulled                  pod/catalogo-api-84764d989-4rs87          Container image "tutorialk8s-catalogo-api:1.0" already present on machine
+2m29s       Normal    Killing                 pod/sqlserver-0                           Stopping container sqlserver
+117s        Normal    Scheduled               pod/sqlserver-0                           Successfully assigned iac-tutorialk8s/sqlserver-0 to lab-k8s-control-plane
+117s        Normal    Pulled                  pod/sqlserver-0                           Container image "mcr.microsoft.com/mssql/server:2022-latest" already present on machine
+117s        Normal    Created                 pod/sqlserver-0                           Created container: sqlserver
+117s        Normal    Started                 pod/sqlserver-0                           Started container sqlserver
+111s        Warning   Unhealthy               pod/catalogo-api-84764d989-4rs87          Readiness probe failed: Get "http://10.244.0.8:8080/health/ready": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+96s         Warning   Unhealthy               pod/catalogo-api-84764d989-4rs87          Readiness probe failed: HTTP probe failed with statuscode: 503
+73s         Normal    SuccessfulCreate        replicaset/catalogo-api-84764d989         Created pod: catalogo-api-84764d989-qdtdh
+73s         Normal    Scheduled               pod/catalogo-api-84764d989-qdtdh          Successfully assigned iac-tutorialk8s/catalogo-api-84764d989-qdtdh to lab-k8s-control-plane
+73s         Normal    Killing                 pod/catalogo-api-84764d989-4rs87          Stopping container api
+72s         Normal    Started                 pod/catalogo-api-84764d989-qdtdh          Started container api
+72s         Normal    Created                 pod/catalogo-api-84764d989-qdtdh          Created container: api
+72s         Normal    Pulled                  pod/catalogo-api-84764d989-qdtdh          Container image "tutorialk8s-catalogo-api:1.0" already present on machine
+59s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled up replica set catalogo-api-84764d989 from 1 to 2
+59s         Normal    SuccessfulCreate        replicaset/catalogo-api-84764d989         Created pod: catalogo-api-84764d989-c8q8f
+59s         Normal    Scheduled               pod/catalogo-api-84764d989-c8q8f          Successfully assigned iac-tutorialk8s/catalogo-api-84764d989-c8q8f to lab-k8s-control-plane
+58s         Normal    Pulled                  pod/catalogo-api-84764d989-c8q8f          Container image "tutorialk8s-catalogo-api:1.0" already present on machine
+58s         Normal    Started                 pod/catalogo-api-84764d989-c8q8f          Started container api
+58s         Normal    Created                 pod/catalogo-api-84764d989-c8q8f          Created container: api
+22s         Normal    Scheduled               pod/catalogo-api-64cb6f7b46-4cr2t         Successfully assigned iac-tutorialk8s/catalogo-api-64cb6f7b46-4cr2t to lab-k8s-control-plane
+22s         Normal    SuccessfulDelete        replicaset/catalogo-api-84764d989         Deleted pod: catalogo-api-84764d989-c8q8f
+22s         Normal    Killing                 pod/catalogo-api-84764d989-c8q8f          Stopping container api
+22s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled down replica set catalogo-api-84764d989 from 2 to 1
+22s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled up replica set catalogo-api-64cb6f7b46 from 0 to 1
+22s         Normal    SuccessfulCreate        replicaset/catalogo-api-64cb6f7b46        Created pod: catalogo-api-64cb6f7b46-4cr2t
+22s         Normal    Started                 pod/catalogo-api-64cb6f7b46-4cr2t         Started container api
+22s         Normal    Created                 pod/catalogo-api-64cb6f7b46-4cr2t         Created container: api
+22s         Normal    Pulled                  pod/catalogo-api-64cb6f7b46-4cr2t         Container image "tutorialk8s-catalogo-api:1.1" already present on machine
+18s         Normal    SuccessfulDelete        replicaset/catalogo-api-84764d989         Deleted pod: catalogo-api-84764d989-qdtdh
+18s         Normal    Killing                 pod/catalogo-api-84764d989-qdtdh          Stopping container api
+18s         Normal    ScalingReplicaSet       deployment/catalogo-api                   Scaled down replica set catalogo-api-84764d989 from 1 to 0
+

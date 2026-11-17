@@ -1,0 +1,39 @@
+# Alteração em k8s/04-api.yaml:
+diff --git a/src/LabIaCK8s/k8s/04-api.yaml b/src/LabIaCK8s/k8s/04-api.yaml
+index ac7ad57..2a8c5de 100644
+--- a/src/LabIaCK8s/k8s/04-api.yaml
++++ b/src/LabIaCK8s/k8s/04-api.yaml
+@@ -4,7 +4,7 @@ metadata:
+   name: catalogo-api
+   namespace: iac-tutorialk8s
+ spec:
+-  replicas: 1
++  replicas: 2
+   strategy:
+     type: RollingUpdate
+     rollingUpdate:
+
+$ kubectl apply -f ./k8s/04-api.yaml
+deployment.apps/catalogo-api configured
+service/catalogo-api unchanged
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+Waiting for deployment "catalogo-api" rollout to finish: 1 of 2 updated replicas are available...
+deployment "catalogo-api" successfully rolled out
+
+$ kubectl -n iac-tutorialk8s get pods -l app=catalogo-api -o wide
+NAME                           READY   STATUS    RESTARTS   AGE   IP            NODE                    NOMINATED NODE   READINESS GATES
+catalogo-api-84764d989-c8q8f   1/1     Running   0          4s    10.244.0.11   lab-k8s-control-plane   <none>           <none>
+catalogo-api-84764d989-qdtdh   1/1     Running   0          18s   10.244.0.10   lab-k8s-control-plane   <none>           <none>
+
+$ kubectl -n iac-tutorialk8s get endpointslices -l kubernetes.io/service-name=catalogo-api
+NAME                 ADDRESSTYPE   PORTS   ENDPOINTS                 AGE
+catalogo-api-vsn4n   IPv4          8080    10.244.0.10,10.244.0.11   2m12s
+
+$ kubectl -n iac-tutorialk8s get statefulset,deployment
+NAME                         READY   AGE
+statefulset.apps/sqlserver   1/1     3m15s
+
+NAME                           READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/catalogo-api   2/2     2            2           2m12s
+

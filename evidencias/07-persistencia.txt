@@ -1,0 +1,56 @@
+### ANTES
+PS> Invoke-RestMethod http://localhost:8080/produtos | Format-Table
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+
+$ kubectl -n iac-tutorialk8s get pod sqlserver-0 -o custom-columns=NAME:.metadata.name,UID:.metadata.uid,START:.status.startTime
+NAME          UID                                    START
+sqlserver-0   4b58d11f-294b-48bd-b9b9-85fced579e1e   2026-11-17T18:01:54Z
+
+$ kubectl -n iac-tutorialk8s delete pod sqlserver-0
+pod "sqlserver-0" deleted from iac-tutorialk8s namespace
+
+$ kubectl -n iac-tutorialk8s get pods,pvc
+NAME                               READY   STATUS              RESTARTS   AGE
+pod/catalogo-api-84764d989-4rs87   1/1     Running             0          70s
+pod/db-migrate-s249t               0/1     Completed           0          75s
+pod/sqlserver-0                    0/1     ContainerCreating   0          0s
+
+NAME                                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+persistentvolumeclaim/dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       <unset>                 2m13s
+
+$ kubectl -n iac-tutorialk8s wait --for=condition=Ready pod/sqlserver-0 --timeout=300s
+pod/sqlserver-0 condition met
+
+$ kubectl -n iac-tutorialk8s get pod sqlserver-0 -o custom-columns=NAME:.metadata.name,UID:.metadata.uid,START:.status.startTime
+NAME          UID                                    START
+sqlserver-0   56078aa1-f065-400c-a393-b2b6a0d802d8   2026-11-17T18:04:03Z
+
+$ kubectl -n iac-tutorialk8s get pvc
+NAME                STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+dados-sqlserver-0   Bound    pvc-e84f1d36-7aca-42df-88b4-5e72a02b49df   8Gi        RWO            standard       <unset>                 2m19s
+
+$ kubectl -n iac-tutorialk8s rollout status deployment/catalogo-api --timeout=180s
+deployment "catalogo-api" successfully rolled out
+
+### DEPOIS (novo Pod do banco, mesmo PVC)
+PS> Invoke-RestMethod http://localhost:8080/health/ready | Format-List
+
+
+status : pronto
+
+
+
+
+PS> Invoke-RestMethod http://localhost:8080/produtos | Format-Table
+
+id nome                  preco
+-- ----                  -----
+ 1 Caderno universitario 24,90
+
+
+
